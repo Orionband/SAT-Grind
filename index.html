@@ -213,29 +213,30 @@
         .submit-btn, .restart-btn { display: block; width: 240px; margin: 32px auto; font-size: 18px; padding: 16px 32px; }
         .restart-btn { margin-top: 40px; margin-bottom: 16px; }
         
-        /* Question styling fixes */
+        /* --- CLIPPING FIX STYLES --- */
         .question { 
-            margin-bottom: 40px; 
-            padding: 0 0 32px 25px; /* Increased left padding to give flag space */
-            border-bottom: 1px solid var(--border-color); 
             position: relative; 
+            margin-bottom: 40px; 
+            padding: 10px 0 32px 25px; 
+            border-bottom: 1px solid var(--border-color); 
         }
-        .question::before {
-            content: ''; 
-            position: absolute; 
-            left: 10px; /* Shifted line to the right */
-            top: 5px; 
-            bottom: 32px;
-            width: 4px; 
-            background-color: var(--primary-color);
-            border-radius: 2px;
+        .bookmark-btn { 
+            position: absolute;
+            top: -5px;
+            left: -10px; /* Position relative to the .question parent */
+            background: none; border: none; font-size: 28px; cursor: pointer; 
+            padding: 8px; line-height: 1; opacity: 0.4; color: var(--text-muted-color); 
+            transition: var(--transition); border-radius: 50%; z-index: 10;
         }
+        .bookmark-btn:hover { background: #f8f9fa; opacity: 0.9; transform: scale(1.1); }
+        .bookmark-btn.bookmarked { opacity: 1; transform: scale(1.1); color: var(--flag-color); }
+        /* --- END FIX --- */
+        
         .question-header { 
             display: flex; 
             align-items: flex-start; 
             gap: 16px; 
             margin-bottom: 24px; 
-            position: relative; 
         }
         .question-text { font-weight: 500; font-size: 1.1em; flex-grow: 1; line-height: 1.6; }
         .question-metadata {
@@ -247,16 +248,7 @@
             border-radius: 20px; border: 1px solid var(--border-color);
             text-transform: uppercase; letter-spacing: 0.05em;
         }
-        .bookmark-btn { 
-            position: absolute; 
-            top: -10px; 
-            left: -35px; /* Adjusted position to be fully visible */
-            background: none; border: none; font-size: 28px; cursor: pointer; 
-            padding: 8px; line-height: 1; opacity: 0.4; color: var(--text-muted-color); 
-            transition: var(--transition); border-radius: 50%; z-index: 10;
-        }
-        .bookmark-btn:hover { background: #f8f9fa; opacity: 0.9; transform: scale(1.1); }
-        .bookmark-btn.bookmarked { opacity: 1; transform: scale(1.1); color: var(--flag-color); }
+
         .answer-choice { 
             margin-bottom: 12px; padding: 14px 20px; border-radius: var(--border-radius); 
             display: block; cursor: pointer; transition: var(--transition); 
@@ -381,7 +373,6 @@
         } else { // 'main' view
             mainScreen.classList.remove('hidden');
             quizContainer.classList.add('hidden');
-            // FIX: Corrected method from .add to .classList.add
             questionNavigator.classList.add('hidden'); 
             quizContainer.innerHTML = ''; 
             resultsContainer.innerHTML = '';
@@ -422,12 +413,12 @@
     }
     
     function loadDataFromStorage() {
-        quizHistory = JSON.parse(localStorage.getItem('satQuizHistory_v3')) || [];
-        bookmarkedQuestions = JSON.parse(localStorage.getItem('satBookmarkedQuestions_v3')) || [];
+        quizHistory = JSON.parse(localStorage.getItem('satQuizHistory_v4')) || [];
+        bookmarkedQuestions = JSON.parse(localStorage.getItem('satBookmarkedQuestions_v4')) || [];
     }
     function saveDataToStorage() {
-        localStorage.setItem('satQuizHistory_v3', JSON.stringify(quizHistory));
-        localStorage.setItem('satBookmarkedQuestions_v3', JSON.stringify(bookmarkedQuestions));
+        localStorage.setItem('satQuizHistory_v4', JSON.stringify(quizHistory));
+        localStorage.setItem('satBookmarkedQuestions_v4', JSON.stringify(bookmarkedQuestions));
     }
     function clearAllData() {
         if (confirm("Are you sure? This will erase all your SAT progress.")) {
@@ -576,7 +567,6 @@
         const qotd = combinedQuestions[qotdIndex];
         currentQuizQuestions = [qotd];
         
-        // FEATURE: Create a dynamic title with domain and difficulty
         const dynamicTitle = `Question of the Day: ${qotd.cat} (${qotd.difficulty})`;
 
         displayQuiz(dynamicTitle);
@@ -627,9 +617,11 @@
             questionDiv.id = `q-${index}`;
             const isBookmarked = bookmarkedQuestions.includes(q.questionId);
             
+            // --- CLIPPING FIX: Button is now a direct child of questionDiv ---
+            const bookmarkBtnHtml = `<button class="bookmark-btn ${isBookmarked ? 'bookmarked' : ''}" onclick="toggleBookmark('${q.questionId}', this, ${index})">🚩</button>`;
+
             const questionHeaderHtml = `
                 <div class="question-header">
-                    <button class="bookmark-btn ${isBookmarked ? 'bookmarked' : ''}" onclick="toggleBookmark('${q.questionId}', this, ${index})">🚩</button>
                     <div class="question-text">${index + 1}. ${q.questionText}</div>
                     <div class="question-metadata">
                         <span class="question-category">${q.cat || 'N/A'}</span>
@@ -646,7 +638,8 @@
                 answersHtml += `<input type="text" class="fb-input" id="fb-input-${index}" autocomplete="off" placeholder="Enter your answer">`;
             }
             
-            questionDiv.innerHTML = questionHeaderHtml + answersHtml;
+            // Assemble with the bookmark button first
+            questionDiv.innerHTML = bookmarkBtnHtml + questionHeaderHtml + answersHtml;
             quizContainer.appendChild(questionDiv);
         });
 
@@ -769,23 +762,20 @@
             }
 
             if (explanationHtml) {
-                // Prepend the answer feedback to the explanation
                 const explanationEl = new DOMParser().parseFromString(explanationHtml, 'text/html').body.firstChild;
                 const firstP = explanationEl.querySelector('p');
                 if (firstP) {
                     firstP.innerHTML = `${answerFeedbackHtml}<br><br>` + firstP.innerHTML;
-                } else {
+                } else if (answerFeedbackHtml) {
                     explanationEl.innerHTML = `<p>${answerFeedbackHtml}</p>` + explanationEl.innerHTML;
                 }
                 questionElement.appendChild(explanationEl);
             } else if (answerFeedbackHtml) {
-                // If there's no explanation, just show the answer feedback
                 questionElement.insertAdjacentHTML('beforeend', `<div class="result-explanation"><p>${answerFeedbackHtml}</p></div>`);
             }
         });
     }
     
-    // Chart rendering functions
     function renderQuizSummaryChart(quizAttempt) {
         const ctx = document.getElementById('quizSummaryChart')?.getContext('2d');
         if (!ctx) return;
