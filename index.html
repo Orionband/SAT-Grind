@@ -517,8 +517,8 @@
     async function loadQuestions() {
         try {
             const [readResponse, mathResponse] = await Promise.all([
-                fetch('fullread.json'),
-                fetch('fullmath.json')
+                fetch('satread.json'),
+                fetch('satmath.json')
             ]);
             if (!readResponse.ok || !mathResponse.ok) throw new Error('Network response was not ok.');
             
@@ -536,7 +536,7 @@
 
         } catch (error) {
             console.error(`Error fetching question files:`, error);
-            mainScreen.innerHTML = `<p style="color: red; text-align: center;">CRITICAL ERROR: Could not load question files (e.g., fullread.json, fullmath.json). Make sure they are in the same directory as this HTML file.</p>`;
+            mainScreen.innerHTML = `<p style="color: red; text-align: center;">CRITICAL ERROR: Could not load question files (e.g., satread.json, satmath.json). Make sure they are in the same directory as this HTML file.</p>`;
         }
     }
     
