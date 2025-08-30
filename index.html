@@ -555,23 +555,33 @@
     }
     
     function startQuestionOfTheDay() {
-        const combinedQuestions = [...readingQuestions, ...mathQuestions];
-        if (combinedQuestions.length === 0) {
-            alert("Questions are still loading or failed to load.");
-            return;
-        }
-        const today = new Date();
-        const dayOfYear = Math.floor((today - new Date(today.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
-        const qotdIndex = dayOfYear % combinedQuestions.length;
-        
-        const qotd = combinedQuestions[qotdIndex];
-        currentQuizQuestions = [qotd];
-        
-        const dynamicTitle = `Question of the Day: ${qotd.cat} (${qotd.difficulty})`;
-
-        displayQuiz(dynamicTitle);
-        startTimer();
+    if (!readingQuestions || readingQuestions.length === 0 || !mathQuestions || mathQuestions.length === 0) {
+        alert("Questions are still loading or failed to load.");
+        return;
     }
+
+    const today = new Date();
+    const dayOfYear = Math.floor(
+        (today - new Date(today.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24)
+    );
+
+    // Pick a Reading question
+    const readingIndex = dayOfYear % readingQuestions.length;
+    const readingQotd = readingQuestions[readingIndex];
+
+    // Pick a Math question
+    const mathIndex = dayOfYear % mathQuestions.length;
+    const mathQotd = mathQuestions[mathIndex];
+
+    // Put both into the quiz for today
+    currentQuizQuestions = [readingQotd, mathQotd];
+
+    const dynamicTitle = `Questions of the Day: Reading (${readingQotd.difficulty}) & Math (${mathQotd.difficulty})`;
+
+    displayQuiz(dynamicTitle);
+    startTimer();
+}
+
 
     function loadAndDisplayQuiz() {
         const numQuestionsInput = document.getElementById('numQuestions');
