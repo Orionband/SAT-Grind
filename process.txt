@@ -1,0 +1,397 @@
+/**
+ * College Board Question Bank Scraper (v15 - Preserve Raw HTML)
+ *
+ * This version has been completely re-engineered based on the user's final
+ * requirement: to preserve the original, raw HTML for all content fields
+ * (question, choices, explanation) so that MathML (<math>) can be rendered
+ * correctly.
+ *
+ * - The `cleanHtml` function has been REMOVED.
+ * - Raw HTML is now assigned directly to the final JSON.
+ * - A temporary, plain-text version of the explanation is still used
+ *   internally to reliably parse the correct answer for SPR questions.
+ */
+(async function scrapeMathQuestionsV15() {
+    console.log("🚀 Starting College Board Question Bank Scraper v15 (Preserve Raw HTML)...");
+    console.warn("This version will keep all original HTML tags for rendering. Estimated run time: 10-12 minutes.");
+
+    const API_URL_LIST = "https://qbank-api.collegeboard.org/msreportingquestionbank-prod/questionbank/digital/get-questions";
+    const API_URL_DETAIL = "https://qbank-api.collegeboard.org/msreportingquestionbank-prod/questionbank/digital/get-question";
+    const API_URL_DISCLOSED = "https://saic.collegeboard.org/disclosed/";
+    const NUM_AGENTS = 1;
+    const CHUNK_SIZE = 500;
+
+    const HEADERS = {
+        'accept': 'application/json, text/plain, */*',
+        'content-type': 'application/json',
+        'origin': 'https://satsuitequestionbank.collegeboard.org',
+        'referer': 'https://satsuitequestionbank.collegeboard.org/',
+        'user-agent': navigator.userAgent,
+    };
+
+    function createDownloadLink(data, filename, linkText) {
+        const oldLink = document.getElementById('question-download-link');
+        if (oldLink) oldLink.remove();
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.id = 'question-download-link';
+        a.href = url;
+        a.download = filename;
+        a.textContent = linkText;
+        a.style.cssText = `position: fixed; top: 10px; left: 10px; z-index: 9999; background: #007bff; color: white; padding: 15px; border-radius: 5px; font-family: sans-serif; text-decoration: none; box-shadow: 0 4px 8px rgba(0,0,0,0.2);`;
+        document.body.appendChild(a);
+    }
+
+    /**
+     * This special helper function is ONLY used internally to get plain text
+     * for parsing the correct answer. It is NOT used on the final output.
+     */
+    function getTextForAnswerParsing(html) {
+        if (!html) return "";
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        // Convert math tags to their human-readable alt text for reliable matching
+        doc.querySelectorAll('math[alttext]').forEach(el => {
+            const formulaText = el.getAttribute('alttext');
+            if (formulaText) { el.outerHTML = ` {${formulaText.trim()}} `; }
+        });
+        doc.querySelectorAll('span.math-container img[alt]').forEach(el => {
+            el.outerHTML = ` {${el.getAttribute('alt').trim()}} `;
+        });
+        return doc.body.textContent;
+    }
+    
+    // --- Parsers now assign RAW HTML and use the helper for answer parsing ---
+    function parseQbankQuestion(data, metadata) {
+        if (!data || !data.externalid) return null;
+        
+        let correctAnswer = (data.correct_answer && data.correct_answer[0]) || null;
+        // Fallback for SPR answers, using the internal helper
+        if (!correctAnswer && data.rationale) {
+            const explanationText = getTextForAnswerParsing(data.rationale);
+            const match = explanationText.match(/The correct answer is (.*?)\./i);
+            if (match && match[1]) { correctAnswer = match[1].trim(); }
+        }
+
+        const choices = {};
+        (data.answerOptions || []).forEach((opt, i) => {
+            choices[String.fromCharCode(65 + i)] = opt.content; // Assign raw HTML
+        });
+
+        return {
+            id: metadata.questionId, domain: metadata.primary_class_cd_desc,
+            question: {
+                paragraph: data.stimulus || "", // Raw HTML
+                question: data.stem || "",       // Raw HTML
+                choices: choices,                // Raw HTML
+                correct_answer: correctAnswer,
+                explanation: data.rationale || "" // Raw HTML
+            },
+        };
+    }
+    
+    function parseDisclosedQuestion(data, metadata) {
+        if (!data || !Array.isArray(data) || data.length === 0) return null;
+        const qData = data[0];
+        
+        let correctAnswer = qData.answer.correct_choice ? qData.answer.correct_choice.toUpperCase() : null;
+        // Fallback for SPR answers, using the internal helper
+        if (!correctAnswer && qData.answer.rationale) {
+            const explanationText = getTextForAnswerParsing(qData.answer.rationale);
+            const match = explanationText.match(/The correct answer is (.*?)\./i);
+            if (match && match[1]) { correctAnswer = match[1].trim(); }
+        }
+
+        const choices = {};
+        if (qData.answer && qData.answer.choices) {
+            for (const key in qData.answer.choices) { 
+                choices[key.toUpperCase()] = qData.answer.choices[key].body; // Assign raw HTML
+            }
+        }
+        
+        return {
+            id: metadata.questionId, domain: metadata.primary_class_cd_desc,
+            question: {
+                paragraph: "", // No paragraph in this format
+                question: qData.prompt || "",       // Raw HTML
+                choices: choices,                   // Raw HTML
+                correct_answer: correctAnswer,
+                explanation: qData.answer.rationale || "" // Raw HTML
+            },
+        };
+    }
+    
+    // The rest of the script is our robust fetching logic
+    async function getQuestionDetails(metadata) {
+        try {
+            if (metadata.ibn) {
+                const url = `${API_URL_DISCLOSED}${metadata.ibn}.json`;
+                const response = await fetch(url);
+                if (!response.ok) { console.error(`Disclosed API Error: ${response.status} for IBN: ${metadata.ibn}`); return null; }
+                const data = await response.json();
+                return parseDisclosedQuestion(data, metadata);
+            } else {
+                const response = await fetch(API_URL_DETAIL, { method: "POST", headers: HEADERS, body: JSON.stringify({ external_id: metadata.external_id }) });
+                if (response.status === 429) {
+                    console.error(`🔴 Rate limited. Pausing for 10s & retrying...`);
+                    await new Promise(resolve => setTimeout(resolve, 10000));
+                    return getQuestionDetails(metadata);
+                }
+                if (!response.ok) { console.error(`QBank API Error: ${response.status} for ID: ${metadata.external_id}`); return null; }
+                const data = await response.json();
+                return parseQbankQuestion(data, metadata);
+            }
+        } catch (error) { console.error(`Network error for item:`, metadata, error); return null; }
+    }
+
+    try {
+        console.log("📚 Fetching Math question lists sequentially...");
+        const questionQueue = [];
+        const mathPayload1 = { asmtEventId: 99, test: 2, domain: "AL,AM,PSDA,GT" };
+        const mathPayload2 = { asmtEventId: 99, test: 2, domain: "H,P,Q,S" };
+
+        const responses = await Promise.all([
+            fetch(API_URL_LIST, { method: "POST", headers: HEADERS, body: JSON.stringify(mathPayload1) }),
+            fetch(API_URL_LIST, { method: "POST", headers: HEADERS, body: JSON.stringify(mathPayload2) })
+        ]);
+
+        for (const res of responses) {
+            const metadata = await res.json();
+            questionQueue.push(...metadata);
+            console.log(`   ...found ${metadata.length} questions from a domain set.`);
+        }
+        
+        const totalQuestions = questionQueue.length;
+        if (totalQuestions === 0) { console.warn("Could not find any Math questions."); return; }
+        console.log(`✅ Found a total of ${totalQuestions} potential questions to process.`);
+
+        const allQuestionsData = [];
+        let completedCount = 0, processedCount = 0;
+
+        const worker = async () => {
+            while (questionQueue.length > 0) {
+                const delay = Math.random() * 75 + 75;
+                await new Promise(resolve => setTimeout(resolve, delay));
+                const metadata = questionQueue.shift();
+                processedCount++;
+
+                if (metadata && (metadata.external_id || metadata.ibn)) {
+                    const questionDetails = await getQuestionDetails(metadata);
+                    if (questionDetails) {
+                        allQuestionsData.push(questionDetails);
+                        completedCount++;
+                        if (completedCount % CHUNK_SIZE === 0 && completedCount < totalQuestions) {
+                            console.log(`✅ Reached ${completedCount} questions. Creating intermediate download link...`);
+                            allQuestionsData.sort((a, b) => a.id.localeCompare(b.id));
+                            createDownloadLink(allQuestionsData, `collegeboard_math_questions_1-${completedCount}.json`, `Download Math Questions (1-${completedCount})`);
+                        }
+                    }
+                } else {
+                    console.warn(`Skipping invalid metadata entry #${processedCount}.`);
+                }
+                
+                if (processedCount % 50 === 0 || processedCount === totalQuestions) {
+                    console.log(`Progress: ${processedCount} / ${totalQuestions} processed. (${completedCount} successfully fetched)`);
+                }
+            }
+        };
+
+        console.log(`🤖 Deploying ${NUM_AGENTS} agent...`);
+        await worker();
+
+        console.log("🎉 Scraping complete!");
+        console.log(`Successfully fetched ${allQuestionsData.length} of ${totalQuestions} potential questions.`);
+        
+        allQuestionsData.sort((a, b) => a.id.localeCompare(b.id));
+        const finalFilename = `collegeboard_math_questions_ALL_${allQuestionsData.length}.json`;
+        const finalLinkText = `Download FINAL (${allQuestionsData.length} Math Questions)`;
+        createDownloadLink(allQuestionsData, finalFilename, finalLinkText);
+        document.getElementById('question-download-link').style.backgroundColor = '#28a745';
+        
+        console.log("✅ Final download link created successfully.");
+        
+    } catch (error) {
+        console.error("❌ An unexpected error occurred during the main process:", error);
+    }
+})();
+
+
+
+
+
+
+
+/**
+ * College Board Question Data Enricher (v1.0)
+ *
+ * This script is designed to add the missing 'difficulty' field to
+ * existing JSON files generated by previous scraper versions.
+ *
+ * How it works:
+ * 1. Creates a UI to allow the user to upload their JSON files.
+ * 2. Fetches the complete and latest question metadata from the API.
+ * 3. Creates an efficient lookup map of questionId -> difficulty.
+ * 4. Reads the user's files, and for each question, adds the corresponding
+ *    difficulty, translated from "E/M/H" to "Easy/Medium/Hard".
+ * 5. Provides a download link for the updated, complete JSON file.
+ */
+(async function createEnricherUI() {
+    console.log("🚀 Initializing Data Enricher script...");
+
+    // --- UI Creation ---
+    const uiContainer = document.createElement('div');
+    uiContainer.id = 'enricher-ui';
+    uiContainer.style.cssText = `
+        position: fixed; top: 10px; left: 10px; z-index: 10000;
+        background: #f0f8ff; color: #333; border: 1px solid #ccc;
+        padding: 20px; border-radius: 8px; font-family: sans-serif;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.2); width: 350px;
+    `;
+    
+    uiContainer.innerHTML = `
+        <h3 style="margin-top:0; padding-bottom:10px; border-bottom:1px solid #ddd;">Question File Enricher</h3>
+        <p style="font-size:14px; margin: 10px 0;">Upload your JSON file(s) to add the missing 'difficulty' field.</p>
+        <input type="file" id="json-file-input" multiple accept=".json" style="margin-bottom: 15px;">
+        <pre id="enricher-status" style="background:#fff; border:1px solid #eee; padding:10px; border-radius:4px; font-size:12px; height:80px; overflow-y:auto; white-space:pre-wrap;"></pre>
+        <div id="enricher-download-link-container"></div>
+    `;
+    document.body.appendChild(uiContainer);
+
+    const fileInput = document.getElementById('json-file-input');
+    const statusLog = document.getElementById('enricher-status');
+    const downloadContainer = document.getElementById('enricher-download-link-container');
+
+    const log = (message) => {
+        console.log(message);
+        statusLog.textContent += message + '\n';
+        statusLog.scrollTop = statusLog.scrollHeight;
+    };
+
+    // --- Core Logic ---
+    const API_URL_LIST = "https://qbank-api.collegeboard.org/msreportingquestionbank-prod/questionbank/digital/get-questions";
+    const HEADERS = { 'accept': 'application/json, text/plain, */*', 'content-type': 'application/json' };
+    const difficultyTranslator = { E: "Easy", M: "Medium", H: "Hard" };
+
+    async function fetchAllMetadata() {
+        log('Fetching all metadata from College Board...');
+        const payloads = [
+            { asmtEventId: 99, test: 1, domain: "INI,CAS,EOI,SEC" },
+            { asmtEventId: 99, test: 2, domain: "AL,AM,PSDA,GT" },
+            { asmtEventId: 99, test: 2, domain: "H,P,Q,S" }
+        ];
+        
+        let allMetadata = [];
+        for (const payload of payloads) {
+            const response = await fetch(API_URL_LIST, { method: "POST", headers: HEADERS, body: JSON.stringify(payload) });
+            const metadata = await response.json();
+            allMetadata.push(...metadata);
+        }
+        log(`Found ${allMetadata.length} total metadata records.`);
+        return allMetadata;
+    }
+
+    function createDifficultyMap(metadata) {
+        log('Creating difficulty lookup map...');
+        const map = new Map();
+        for (const item of metadata) {
+            if (item.questionId && item.difficulty) {
+                map.set(item.questionId, item.difficulty);
+            }
+        }
+        log('Map created successfully.');
+        return map;
+    }
+
+    function readFile(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    resolve(data);
+                } catch (e) {
+                    reject(new Error(`Error parsing ${file.name}: ${e.message}`));
+                }
+            };
+            reader.onerror = (error) => reject(error);
+            reader.readAsText(file);
+        });
+    }
+
+    fileInput.addEventListener('change', async (event) => {
+        const files = event.target.files;
+        if (files.length === 0) return;
+
+        statusLog.textContent = ''; // Clear log
+        downloadContainer.innerHTML = ''; // Clear old download link
+        log(`Processing ${files.length} file(s)...`);
+
+        try {
+            // 1. Read and parse all uploaded files
+            const allUploadedData = await Promise.all(Array.from(files).map(readFile));
+            const combinedQuestions = [].concat(...allUploadedData);
+            log(`Successfully read ${combinedQuestions.length} questions from your file(s).`);
+
+            // 2. Fetch metadata and create map
+            const metadata = await fetchAllMetadata();
+            const difficultyMap = createDifficultyMap(metadata);
+
+            // 3. Enrich the data
+            log('Adding difficulty ratings...');
+            let updatedCount = 0;
+            for (const question of combinedQuestions) {
+                const difficultyCode = difficultyMap.get(question.id);
+                if (difficultyCode) {
+                    question.difficulty = difficultyTranslator[difficultyCode] || difficultyCode;
+                    updatedCount++;
+                } else {
+                    question.difficulty = "Unknown";
+                }
+            }
+            log(`Enriched ${updatedCount} of ${combinedQuestions.length} questions.`);
+
+            // 4. Create download link
+            const blob = new Blob([JSON.stringify(combinedQuestions, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'enriched_questions.json';
+            a.textContent = 'Download Enriched File';
+            a.style.cssText = 'display:inline-block; padding:10px 15px; background:#28a745; color:white; text-decoration:none; border-radius:5px;';
+            downloadContainer.appendChild(a);
+            log('Done! Your file is ready to download.');
+
+        } catch (error) {
+            console.error(error);
+            log(`ERROR: ${error.message}`);
+            statusLog.style.color = 'red';
+        }
+    });
+
+    log('Ready. Please choose your JSON file(s).');
+})();
+
+
+
+
+
+# Define file paths
+$files = @("satread.json", "satmath.json")
+
+foreach ($file in $files) {
+    if (Test-Path $file) {
+        # Read file content as UTF-8
+        $content = Get-Content -Path $file -Raw -Encoding UTF8
+
+        # Replace "______blank" with "______"
+        $newContent = $content -replace "______blank", "______"
+
+        # Write back as UTF-8 without BOM (default for most JSON tools)
+        [System.IO.File]::WriteAllText($file, $newContent, [System.Text.Encoding]::UTF8)
+
+        Write-Output "Updated $file successfully (UTF-8 preserved)."
+    }
+    else {
+        Write-Output "File not found: $file"
+    }
+}
