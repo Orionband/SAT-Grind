@@ -525,7 +525,7 @@
         try {
             const [readResponse, mathResponse] = await Promise.all([
                 fetch('satread.json'),
-                fetch('oneprep_questions.json')
+                fetch('satmath.json')
             ]);
             if (!readResponse.ok || !mathResponse.ok) throw new Error('Network response was not ok.');
             
